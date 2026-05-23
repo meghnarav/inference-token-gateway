@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 /**
  * Primary REST controller for the Inference Token Gateway.
  *
@@ -28,18 +30,16 @@ public class GatewayController {
 
     private final GatewayService gatewayService;
 
-    /**
-     * Submit a prompt for LLM inference.
-     *
-     * Enforces:
-     * - Input validation (@Valid)
-     * - Token-based rate limiting per user
-     * - Prompt-level response caching
-     * - Idempotency (optional idempotencyKey field)
-     *
-     * @param request GenerateRequest containing userId, prompt, and optional idempotencyKey
-     * @return GenerateResponse with the model output and usage metadata
-     */
+    @GetMapping("/")
+    public ResponseEntity<?> root() {
+        return ResponseEntity.ok(
+            java.util.Map.of(
+                "service", "inference-token-gateway",
+                "status", "running"
+            )
+        );
+    }
+
     @PostMapping("/generate")
     public ResponseEntity<GenerateResponse> generate(@Valid @RequestBody GenerateRequest request) {
         GenerateResponse response = gatewayService.processGenerate(request);
@@ -51,18 +51,6 @@ public class GatewayController {
                 .body(response);
     }
 
-    /**
-     * Retrieve usage statistics for a given user.
-     *
-     * Returns:
-     * - Historical usage from PostgreSQL (last 30 days)
-     * - Current sliding window usage from Redis
-     * - Cache hit rate
-     * - Per-day breakdown
-     *
-     * @param userId The user ID to query
-     * @return UsageResponse with aggregated and per-day statistics
-     */
     @GetMapping("/usage/{userId}")
     public ResponseEntity<UsageResponse> getUsage(@PathVariable String userId) {
         UsageResponse usage = gatewayService.getUsage(userId);

@@ -1,14 +1,13 @@
 # ── Stage 1: Build ──────────────────────────────────────────────────────────────
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM maven:3.9.6-eclipse-temurin-21 AS builder
 
 WORKDIR /build
 
-# Cache Maven dependencies before copying source
 COPY pom.xml .
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn dependency:go-offline -B --no-transfer-progress 2>/dev/null || true
+RUN mvn dependency:go-offline -B
 
 COPY src ./src
+RUN mvn package -DskipTests -B
 
 RUN --mount=type=cache,target=/root/.m2 \
     mvn package -DskipTests -B --no-transfer-progress

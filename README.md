@@ -1,2 +1,2 @@
 # inference-token-gateway
-A high-performance Go proxy for LLM orchestration featuring semantic caching and token-based rate limiting.
+Distributed inference gateway with token-based rate limiting, caching, and usage tracking to simulate LLM API infrastructure under high concurrency.

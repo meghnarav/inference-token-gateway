@@ -1,0 +1,99 @@
+spring:
+  application:
+    name: inference-token-gateway
+
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:tokengateway}
+    username: ${POSTGRES_USER:gateway_user}
+    password: ${POSTGRES_PASSWORD:gateway_pass}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 30000
+      pool-name: GatewayHikariPool
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 2
+          max-wait: 1000ms
+        shutdown-timeout: 200ms
+
+  cache:
+    type: redis
+
+# Rate limiting configuration
+gateway:
+  rate-limit:
+    # Sliding window: tokens per minute per user
+    tokens-per-minute: ${RATE_LIMIT_TOKENS_PER_MINUTE:10000}
+    # Window duration in seconds
+    window-seconds: 60
+    # Redis key TTL buffer beyond window
+    key-ttl-buffer-seconds: 10
+    # Enable/disable rate limiting (for circuit breaker fallback)
+    enabled: ${RATE_LIMIT_ENABLED:true}
+
+  cache:
+    # Response cache TTL in seconds
+    response-ttl-seconds: ${CACHE_TTL_SECONDS:300}
+    # Max prompt length eligible for caching
+    max-cacheable-prompt-length: 2000
+    # Cache key prefix
+    key-prefix: "resp:v1:"
+
+  llm:
+    # Simulated LLM latency range (ms)
+    min-latency-ms: 100
+    max-latency-ms: 800
+    # Average tokens per word in simulated responses
+    tokens-per-word: 1.3
+    # Response words range
+    min-response-words: 20
+    max-response-words: 150
+
+  idempotency:
+    # Idempotency key TTL (seconds)
+    ttl-seconds: 86400
+
+# Actuator / observability
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+
+# Logging
+logging:
+  level:
+    com.tokengateway: INFO
+    org.springframework.data.redis: WARN
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{requestId}] [%X{userId}] %logger{36} - %msg%n"

@@ -1,0 +1,105 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Inference Token Gateway — Docker Compose
+#
+# Services:
+#   gateway    - Spring Boot application (port 8080)
+#   postgres   - PostgreSQL 16 (port 5432)
+#   redis      - Redis 7 (port 6379)
+#   redis-cli  - Optional admin CLI (comment in to use)
+#
+# Usage:
+#   docker compose up --build          # First run (builds the JAR)
+#   docker compose up -d               # Detached mode
+#   docker compose logs -f gateway     # Stream app logs
+#   docker compose down -v             # Destroy including volumes
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: gateway-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       tokengateway
+      POSTGRES_USER:     gateway_user
+      POSTGRES_PASSWORD: gateway_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway_user -d tokengateway"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: gateway-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --appendonly no
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ── Gateway Application ─────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gateway-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Database
+      POSTGRES_HOST:     postgres
+      POSTGRES_PORT:     5432
+      POSTGRES_DB:       tokengateway
+      POSTGRES_USER:     gateway_user
+      POSTGRES_PASSWORD: gateway_pass
+      # Redis
+      REDIS_HOST:        redis
+      REDIS_PORT:        6379
+      # Rate limiting
+      RATE_LIMIT_TOKENS_PER_MINUTE: 1000    # Low limit for demo purposes
+      RATE_LIMIT_ENABLED:           true
+      # Cache
+      CACHE_TTL_SECONDS: 300
+      # Spring profiles
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local

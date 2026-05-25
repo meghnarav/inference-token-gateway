@@ -16,9 +16,9 @@ This system models those constraints using a backend gateway architecture.
 ## System Overview
 
 Request flow:
-
-Client → API Gateway → Rate Limiter (Redis) → Cache Layer (Redis) → LLM Backend (Simulated) → Usage Tracker (PostgreSQL)
-
+```bash
+Client → API Gateway → Rate Limiter(Redis) → Cache Layer(Redis) → LLM Backend(Simulated) → Usage Tracker(PostgreSQL)
+```
 ---
 
 ## Core Features

@@ -45,7 +45,7 @@ Client → API Gateway → Rate Limiter(Redis) → Cache Layer(Redis) → LLM Ba
 
 ## Tech Stack
 
-- Java / Spring Boot (or Python if applicable — adjust this honestly)
+- Java / Spring Boot
 - Redis (rate limiting + caching)
 - PostgreSQL (usage tracking)
 - Docker Compose (local orchestration)

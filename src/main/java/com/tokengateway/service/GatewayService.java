@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tokengateway.dto.GenerateRequest;
 import com.tokengateway.dto.GenerateResponse;
 import com.tokengateway.dto.RateLimitResult;
+import com.tokengateway.dto.StreamChunk;
 import com.tokengateway.dto.UsageResponse;
 import com.tokengateway.exception.RateLimitExceededException;
 import com.tokengateway.exception.UserNotFoundException;
@@ -14,9 +15,14 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Central orchestrator for the inference gateway pipeline.
@@ -231,6 +237,193 @@ public class GatewayService {
         } finally {
             MDC.clear();
         }
+    }
+
+    /**
+     * Streams response chunks via Server-Sent Events (SSE).
+     *
+     * Streaming Lifecycle & On-the-fly Accounting:
+     * ─────────────────────────────────────────────
+     * 1. Idempotency check -> replay full cached response as single stream if duplicate.
+     * 2. Semantic Cache check -> return cached response as stream if cosine similarity >= 0.95.
+     * 3. Pre-flight rate limit check (conservative estimate).
+     * 4. As LLM chunks stream in:
+     *    - Count tokens on the fly using TokenCounter BPE estimation.
+     *    - If cumulative tokens exceed granted budget, check Redis rate limiter for delta.
+     *    - If mid-stream quota is exceeded, terminate stream with rate_limit_exceeded event.
+     * 5. On completion:
+     *    - Refund unneeded tokens back to Redis sliding window.
+     *    - Store response + embedding in Semantic Cache (pgvector).
+     *    - Persist usage event into PostgreSQL asynchronously.
+     */
+    public Flux<ServerSentEvent<StreamChunk>> streamGenerate(GenerateRequest request) {
+        String requestId = requestIdGen.generate();
+        long startMs = System.currentTimeMillis();
+        String userId = request.getUserId();
+        String prompt = request.getPrompt();
+        String model = request.getModel();
+
+        log.info("[GATEWAY-STREAM] REQUEST RECEIVED requestId={} userId={} promptLength={}",
+                requestId, userId, prompt.length());
+
+        // Step 1: Idempotency check
+        if (request.getIdempotencyKey() != null) {
+            var existing = usageTracker.findIdempotencyKey(request.getIdempotencyKey(), userId);
+            if (existing.isPresent()) {
+                log.info("[GATEWAY-STREAM] IDEMPOTENT REPLAY requestId={} idempotencyKey={}",
+                        requestId, request.getIdempotencyKey());
+                try {
+                    GenerateResponse cached = objectMapper.readValue(existing.get().getResponseBody(), GenerateResponse.class);
+                    StreamChunk chunk = StreamChunk.builder()
+                            .requestId(requestId)
+                            .content(cached.getResponse())
+                            .tokensSoFar(cached.getTokensConsumed())
+                            .cacheHit(true)
+                            .done(true)
+                            .finishReason("stop")
+                            .build();
+                    return Flux.just(ServerSentEvent.builder(chunk).build());
+                } catch (JsonProcessingException ignored) {}
+            }
+        }
+
+        // Step 2: Semantic Cache lookup (LangChain4j + pgvector)
+        var cached = responseCache.get(prompt);
+        if (cached.isPresent()) {
+            GenerateResponse cachedResponse = cached.get();
+            int promptTokens = tokenCounter.estimateTokens(prompt);
+            long latency = System.currentTimeMillis() - startMs;
+            log.info("[GATEWAY-STREAM] CACHE_HIT requestId={} userId={}", requestId, userId);
+
+            // Record reduced usage for cache hit
+            recordUsageAsync(requestId, userId, prompt, promptTokens, true, latency);
+
+            StreamChunk chunk = StreamChunk.builder()
+                    .requestId(requestId)
+                    .content(cachedResponse.getResponse())
+                    .tokensSoFar(promptTokens)
+                    .cacheHit(true)
+                    .done(true)
+                    .finishReason("stop")
+                    .build();
+            return Flux.just(ServerSentEvent.builder(chunk).build());
+        }
+
+        // Step 3: Pre-flight rate limit check (conservative prompt tokens estimate, min 50)
+        int initialEstimatedTokens = Math.max(50, tokenCounter.estimateTokens(prompt));
+        RateLimitResult rateLimitResult = rateLimiter.tryConsume(userId, initialEstimatedTokens);
+        if (!rateLimitResult.isAllowed()) {
+            log.warn("[GATEWAY-STREAM] RATE_LIMIT_EXCEEDED pre-flight userId={}", userId);
+            return Flux.error(new RateLimitExceededException(
+                    userId,
+                    rateLimitResult.getCurrentUsage(),
+                    rateLimitResult.getLimit(),
+                    rateLimitResult.getWindowResetSeconds()
+            ));
+        }
+
+        // Step 4: Stream from LLM backend with on-the-fly token counting and rate limit enforcement
+        StringBuilder fullResponse = new StringBuilder();
+        AtomicInteger grantedTokens = new AtomicInteger(initialEstimatedTokens);
+        AtomicInteger promptTokens = new AtomicInteger(tokenCounter.estimateTokens(prompt));
+        AtomicBoolean rateLimitedMidStream = new AtomicBoolean(false);
+
+        Flux<String> rawStream = llmBackend.stream(requestId, userId, prompt, model);
+
+        return rawStream
+                .takeWhile(chunk -> !rateLimitedMidStream.get())
+                .flatMap(chunk -> {
+                    fullResponse.append(chunk);
+                    // Count total tokens generated so far on the fly
+                    int currentGenTokens = tokenCounter.estimateTokens(fullResponse.toString());
+                    int totalConsumed = promptTokens.get() + currentGenTokens;
+
+                    // If consumption exceeds pre-granted budget, enforce rate limit on the fly
+                    if (totalConsumed > grantedTokens.get()) {
+                        int deltaNeeded = totalConsumed - grantedTokens.get();
+                        RateLimitResult additionalResult = rateLimiter.tryConsume(userId, deltaNeeded);
+                        if (additionalResult.isAllowed()) {
+                            grantedTokens.addAndGet(deltaNeeded);
+                        } else {
+                            log.warn("[GATEWAY-STREAM] MID-STREAM RATE LIMIT EXCEEDED userId={} totalTokens={}",
+                                    userId, totalConsumed);
+                            rateLimitedMidStream.set(true);
+                            StreamChunk errorChunk = StreamChunk.builder()
+                                    .requestId(requestId)
+                                    .content(chunk)
+                                    .tokensSoFar(totalConsumed)
+                                    .done(true)
+                                    .finishReason("rate_limit_exceeded")
+                                    .error("Token limit exceeded mid-stream")
+                                    .build();
+                            return Flux.just(ServerSentEvent.builder(errorChunk).build());
+                        }
+                    }
+
+                    StreamChunk dataChunk = StreamChunk.builder()
+                            .requestId(requestId)
+                            .content(chunk)
+                            .tokensSoFar(totalConsumed)
+                            .done(false)
+                            .cacheHit(false)
+                            .build();
+                    return Flux.just(ServerSentEvent.builder(dataChunk).build());
+                })
+                .concatWith(Flux.defer(() -> {
+                    // Final completion event (if not already terminated due to rate limit)
+                    if (rateLimitedMidStream.get()) {
+                        return Flux.empty();
+                    }
+                    int finalTotalTokens = promptTokens.get() + tokenCounter.estimateTokens(fullResponse.toString());
+                    StreamChunk doneChunk = StreamChunk.builder()
+                            .requestId(requestId)
+                            .content("")
+                            .tokensSoFar(finalTotalTokens)
+                            .done(true)
+                            .cacheHit(false)
+                            .finishReason("stop")
+                            .build();
+                    return Flux.just(ServerSentEvent.builder(doneChunk).build());
+                }))
+                .doOnComplete(() -> {
+                    long totalLatency = System.currentTimeMillis() - startMs;
+                    int actualTotalTokens = promptTokens.get() + tokenCounter.estimateTokens(fullResponse.toString());
+
+                    // Refund any unused granted tokens
+                    int refund = grantedTokens.get() - actualTotalTokens;
+                    if (refund > 0) {
+                        rateLimiter.refund(userId, refund);
+                    }
+
+                    // Store in Semantic Cache
+                    if (!fullResponse.isEmpty() && !rateLimitedMidStream.get()) {
+                        GenerateResponse completeResponse = GenerateResponse.builder()
+                                .requestId(requestId)
+                                .userId(userId)
+                                .response(fullResponse.toString())
+                                .tokensConsumed(actualTotalTokens)
+                                .cacheHit(false)
+                                .latencyMs(totalLatency)
+                                .model(model != null ? model : "simulated-v1")
+                                .timestamp(Instant.now())
+                                .build();
+                        responseCache.put(prompt, completeResponse);
+                        storeIdempotencyKey(request.getIdempotencyKey(), requestId, userId, completeResponse);
+                    }
+
+                    // Record usage in PostgreSQL
+                    recordUsageAsync(requestId, userId, prompt, actualTotalTokens, false, totalLatency);
+                    log.info("[GATEWAY-STREAM] STREAM FINISHED requestId={} userId={} tokens={} latencyMs={}",
+                            requestId, userId, actualTotalTokens, totalLatency);
+                })
+                .doOnError(err -> {
+                    log.error("[GATEWAY-STREAM] STREAM ERROR requestId={} error={}", requestId, err.getMessage());
+                    // Refund unconsumed tokens
+                    int refund = grantedTokens.get() - promptTokens.get();
+                    if (refund > 0) {
+                        rateLimiter.refund(userId, refund);
+                    }
+                });
     }
 
     private void recordUsageAsync(String requestId, String userId, String prompt,

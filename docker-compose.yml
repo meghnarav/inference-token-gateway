@@ -16,9 +16,9 @@
 
 services:
 
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  # ── PostgreSQL with pgvector ───────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: gateway-postgres
     restart: unless-stopped
     environment:
@@ -82,6 +82,14 @@ services:
       RATE_LIMIT_ENABLED:           true
       # Cache
       CACHE_TTL_SECONDS: 300
+      # LLM backend
+      LLM_PROVIDER:           ${LLM_PROVIDER:-simulated}
+      OPENAI_API_KEY:         ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL:        ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_DEFAULT_MODEL:   ${OPENAI_DEFAULT_MODEL:-gpt-4o-mini}
+      OLLAMA_BASE_URL:        ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_DEFAULT_MODEL:   ${OLLAMA_DEFAULT_MODEL:-llama3.2}
+      LLM_READ_TIMEOUT_MS:    ${LLM_READ_TIMEOUT_MS:-120000}
       # Spring profiles
       SPRING_PROFILES_ACTIVE: docker
     depends_on:

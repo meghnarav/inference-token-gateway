@@ -26,7 +26,7 @@ import java.util.concurrent.ThreadLocalRandom;
  *   3. Add @Primary or @Profile("production")
  *   4. Remove @Primary from this bean (or use profiles)
  */
-@Service
+@Service("simulatedLlmBackend")
 @Slf4j
 @RequiredArgsConstructor
 public class SimulatedLlmBackend implements LlmBackend {
@@ -73,6 +73,17 @@ public class SimulatedLlmBackend implements LlmBackend {
                 .model(model != null ? model : MODEL_ID)
                 .timestamp(Instant.now())
                 .build();
+    }
+
+    @Override
+    public reactor.core.publisher.Flux<String> stream(String requestId, String userId, String prompt, String model) {
+        String responseText = generateResponse(prompt);
+        // Split by word boundaries keeping trailing whitespace attached
+        String[] tokens = responseText.split("(?<=\\s)");
+        return reactor.core.publisher.Flux.fromArray(tokens)
+                .delayElements(java.time.Duration.ofMillis(25))
+                .doOnSubscribe(s -> log.info("[SIMULATED-STREAM] START requestId={} userId={}", requestId, userId))
+                .doOnComplete(() -> log.info("[SIMULATED-STREAM] COMPLETE requestId={}", requestId));
     }
 
     private int simulateLatency() {

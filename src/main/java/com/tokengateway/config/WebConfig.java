@@ -18,6 +18,12 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/generate/**")
+                .allowedOriginPatterns("*")
+                .allowedMethods("POST", "OPTIONS")
+                .allowedHeaders("*")
+                .maxAge(3600);
+
         registry.addMapping("/generate")
                 .allowedOriginPatterns("*")
                 .allowedMethods("POST", "OPTIONS")

@@ -513,6 +513,7 @@
     <div class="status-pill">
       <div class="dot" id="health-dot"></div>
       <span id="health-label">connecting…</span>
+      <span id="provider-badge" style="display:none; margin-left:6px; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:600; letter-spacing:.04em; background:var(--accent-lo); color:var(--accent);"></span>
     </div>
   </header>
 
@@ -636,6 +637,21 @@ async function checkHealth() {
 
 checkHealth();
 setInterval(checkHealth, 15_000);
+
+async function fetchProvider() {
+  try {
+    const r = await fetch(`${API}/api/status`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data.provider) {
+        const badge = $('provider-badge');
+        badge.textContent = data.provider.toUpperCase();
+        badge.style.display = '';
+      }
+    }
+  } catch { /* non-fatal */ }
+}
+fetchProvider();
 
 /* ── Idempotency toggle ─────────────────────────────────────────────── */
 let idempotencyVisible = false;

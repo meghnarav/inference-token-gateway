@@ -30,8 +30,16 @@ public class GatewayController {
 
     private final GatewayService gatewayService;
 
+    /** Redirect bare root to the frontend SPA. */
     @GetMapping("/")
     public ResponseEntity<?> root() {
+        return ResponseEntity.status(302)
+                .header("Location", "/index.html")
+                .build();
+    }
+
+    @GetMapping("/api/status")
+    public ResponseEntity<?> apiStatus() {
         return ResponseEntity.ok(
             java.util.Map.of(
                 "service", "inference-token-gateway",

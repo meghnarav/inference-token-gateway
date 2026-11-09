@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inference Token Gateway</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f0f11;
+      --surface:   #18181b;
+      --border:    #27272a;
+      --muted:     #52525b;
+      --text:      #e4e4e7;
+      --text-dim:  #a1a1aa;
+      --accent:    #6366f1;
+      --accent-lo: #312e81;
+      --green:     #22c55e;
+      --amber:     #f59e0b;
+      --red:       #ef4444;
+      --mono:      "SF Mono", ui-monospace, "Cascadia Code", monospace;
+      --sans:      -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --radius:    8px;
+      --radius-lg: 12px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    .shell {
+      display: grid;
+      grid-template-rows: 56px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: var(--border);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.3s;
+    }
+    .dot.alive  { background: var(--green); box-shadow: 0 0 0 2px rgba(34,197,94,.2); }
+    .dot.dead   { background: var(--red); }
+
+    /* ── Main two-column ──────────────────────────────────────────────── */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; overflow: auto; }
+    }
+
+    /* ── Panel ────────────────────────────────────────────────────────── */
+    .panel {
+      padding: 28px 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow-y: auto;
+      height: calc(100vh - 56px);
+    }
+
+    .panel + .panel {
+      border-left: 1px solid var(--border);
+    }
+
+    .panel-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+
+    /* ── Form elements ────────────────────────────────────────────────── */
+    label {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      padding: 10px 12px;
+      outline: none;
+      transition: border-color .15s;
+      resize: none;
+    }
+
+    input:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+
+    textarea {
+      min-height: 120px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .field { display: flex; flex-direction: column; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* ── Button ───────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 10px 18px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity .15s, transform .1s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(.98); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) { opacity: .88; }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+    .btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* ── Response card ────────────────────────────────────────────────── */
+    .response-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadeUp .25s ease;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .response-text {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.8;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .response-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+    }
+
+    .chip .chip-label { color: var(--muted); margin-right: 2px; }
+    .chip.hit  { border-color: rgba(34,197,94,.35); color: var(--green); }
+    .chip.miss { border-color: rgba(99,102,241,.3); color: var(--accent); }
+
+    /* ── Error banner ─────────────────────────────────────────────────── */
+    .error-banner {
+      background: rgba(239,68,68,.08);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 12px;
+      color: #fca5a5;
+      animation: fadeUp .2s ease;
+    }
+
+    /* ── Rate-limit bar ───────────────────────────────────────────────── */
+    .quota-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .quota-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .bar-track {
+      height: 5px;
+      background: var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--accent);
+      transition: width .4s ease, background .3s;
+    }
+    .bar-fill.warn  { background: var(--amber); }
+    .bar-fill.crit  { background: var(--red); }
+
+    /* ── Divider ──────────────────────────────────────────────────────── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 0;
+    }
+
+    /* ── Usage panel ──────────────────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+
+    .stat-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* ── Mini chart ───────────────────────────────────────────────────── */
+    .chart-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .chart-title {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    .bar-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      height: 72px;
+    }
+
+    .bar-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      height: 100%;
+      justify-content: flex-end;
+    }
+
+    .bar-col-fill {
+      width: 100%;
+      background: var(--accent-lo);
+      border-top: 2px solid var(--accent);
+      border-radius: 3px 3px 0 0;
+      min-height: 3px;
+      transition: height .4s ease;
+    }
+
+    .bar-col-label {
+      font-size: 9px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* ── Breakdown table ──────────────────────────────────────────────── */
+    .breakdown-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .breakdown-table th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 500;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .breakdown-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid rgba(39,39,42,.5);
+      color: var(--text-dim);
+      font-family: var(--mono);
+    }
+
+    .breakdown-table tr:last-child td { border-bottom: none; }
+    .breakdown-table td:first-child   { color: var(--text); font-family: var(--sans); }
+
+    /* ── Empty / placeholder ──────────────────────────────────────────── */
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 32px 0;
+    }
+
+    /* ── Spinner ──────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Tab strip ────────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      background: var(--border);
+      border-radius: var(--radius);
+      padding: 3px;
+      width: fit-content;
+    }
+
+    .tab {
+      padding: 5px 14px;
+      border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--muted);
+      border: none;
+      background: none;
+      font-family: inherit;
+      transition: all .15s;
+    }
+
+    .tab.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+
+    /* ── History list ─────────────────────────────────────────────────── */
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background .12s, border-color .12s;
+      gap: 10px;
+    }
+
+    .history-item:hover {
+      background: var(--surface);
+      border-color: var(--border);
+    }
+
+    .history-prompt {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+
+    .history-chips {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    /* ── Scrollbar ────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+  </style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      Inference Token Gateway
+    </div>
+    <div class="status-pill">
+      <div class="dot" id="health-dot"></div>
+      <span id="health-label">connecting…</span>
+    </div>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────────────────── -->
+  <main>
+
+    <!-- ── LEFT: Playground ─────────────────────────────────────────── -->
+    <div class="panel" id="panel-generate">
+      <div class="panel-title">Playground</div>
+
+      <!-- User + model row -->
+      <div class="row">
+        <div class="field">
+          <label for="userId">User ID</label>
+          <input id="userId" type="text" placeholder="alice" value="alice" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <input id="model" type="text" placeholder="simulated-v1" value="simulated-v1" autocomplete="off" />
+        </div>
+      </div>
+
+      <!-- Idempotency key (collapsed by default) -->
+      <div class="field" id="idempotency-row" style="display:none">
+        <label for="idempotencyKey">Idempotency Key <span style="color:var(--muted)">(optional)</span></label>
+        <input id="idempotencyKey" type="text" placeholder="unique-request-id" autocomplete="off" />
+      </div>
+
+      <!-- Prompt -->
+      <div class="field">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" placeholder="Explain the trade-offs between sliding window and token bucket rate limiting…"></textarea>
+      </div>
+
+      <!-- Token quota bar -->
+      <div class="quota-wrap" id="quota-wrap" style="display:none">
+        <div class="quota-labels">
+          <span>Rate-limit window</span>
+          <span id="quota-text">– / –</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" id="quota-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-primary" id="btn-generate">
+          <span class="btn-label">Generate</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="btn-toggle-idempotency">+ Idempotency key</button>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-history" style="margin-left:auto">Clear history</button>
+      </div>
+
+      <hr />
+
+      <!-- Response / error area -->
+      <div id="response-area"></div>
+
+      <!-- Request history -->
+      <div id="history-section" style="display:none">
+        <div class="panel-title" style="margin-bottom:12px">History</div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT: Usage Dashboard ────────────────────────────────────── -->
+    <div class="panel" id="panel-usage">
+      <div class="panel-title">Usage Dashboard</div>
+
+      <!-- Lookup form -->
+      <div style="display:flex; gap:10px; align-items:flex-end;">
+        <div class="field" style="flex:1">
+          <label for="lookupUserId">User ID</label>
+          <input id="lookupUserId" type="text" placeholder="alice" value="alice" autocomplete="off" />
+        </div>
+        <button class="btn btn-primary" id="btn-lookup" style="margin-bottom:0; flex-shrink:0">
+          <span class="btn-label">Load</span>
+        </button>
+      </div>
+
+      <!-- Stats grid -->
+      <div id="stats-area">
+        <div class="empty">Enter a user ID and click Load to see usage stats.</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   Inference Token Gateway — Frontend
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const API = '';  // same-origin; set to 'http://localhost:8080' for dev if needed
+
+/* ── Utilities ──────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n).toLocaleString();
+const pct = (a, b) => b > 0 ? Math.round(a / b * 100) : 0;
+
+function dateLabel(isoDate) {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+}
+
+/* ── Health check ───────────────────────────────────────────────────── */
+async function checkHealth() {
+  try {
+    const r = await fetch(`${API}/actuator/health`, { signal: AbortSignal.timeout(3000) });
+    const data = await r.json();
+    const up = data.status === 'UP';
+    $('health-dot').className   = `dot ${up ? 'alive' : 'dead'}`;
+    $('health-label').textContent = up ? 'running' : 'degraded';
+  } catch {
+    $('health-dot').className   = 'dot dead';
+    $('health-label').textContent = 'unreachable';
+  }
+}
+
+checkHealth();
+setInterval(checkHealth, 15_000);
+
+/* ── Idempotency toggle ─────────────────────────────────────────────── */
+let idempotencyVisible = false;
+$('btn-toggle-idempotency').addEventListener('click', () => {
+  idempotencyVisible = !idempotencyVisible;
+  $('idempotency-row').style.display = idempotencyVisible ? '' : 'none';
+  $('btn-toggle-idempotency').textContent = idempotencyVisible
+    ? '− Idempotency key'
+    : '+ Idempotency key';
+});
+
+/* ── Request history ────────────────────────────────────────────────── */
+let history = [];
+
+function addHistory(prompt, response) {
+  history.unshift({ prompt, response, ts: Date.now() });
+  if (history.length > 20) history.pop();
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = $('history-list');
+  const section = $('history-section');
+  if (!history.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  list.innerHTML = history.map((item, idx) => `
+    <div class="history-item" onclick="restoreHistory(${idx})">
+      <span class="history-prompt">${escHtml(item.prompt)}</span>
+      <span class="history-chips">
+        <span class="chip ${item.response.cacheHit ? 'hit' : 'miss'}">
+          ${item.response.cacheHit ? '⚡ cache' : '🔄 live'}
+        </span>
+        <span class="chip"><span class="chip-label">t</span>${item.response.tokensConsumed}</span>
+      </span>
+    </div>
+  `).join('');
+}
+
+function restoreHistory(idx) {
+  const item = history[idx];
+  $('prompt').value = item.prompt;
+  $('userId').value = item.response.userId;
+  renderResponse(item.response);
+}
+
+$('btn-clear-history').addEventListener('click', () => {
+  history = [];
+  renderHistory();
+});
+
+/* ── Generate ───────────────────────────────────────────────────────── */
+$('btn-generate').addEventListener('click', doGenerate);
+$('prompt').addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') doGenerate();
+});
+
+async function doGenerate() {
+  const userId        = $('userId').value.trim();
+  const prompt        = $('prompt').value.trim();
+  const model         = $('model').value.trim() || undefined;
+  const idempotencyKey = idempotencyVisible ? $('idempotencyKey').value.trim() || undefined : undefined;
+
+  if (!userId) { showError('User ID is required.'); return; }
+  if (!prompt)  { showError('Prompt is required.'); return; }
+
+  setGenerateLoading(true);
+  clearResponse();
+
+  try {
+    const body = { userId, prompt, ...(model && { model }), ...(idempotencyKey && { idempotencyKey }) };
+    const r = await fetch(`${API}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      showApiError(data);
+      return;
+    }
+
+    renderResponse(data);
+    addHistory(prompt, data);
+    updateQuota(data.tokensConsumed, data.remainingTokensThisMinute);
+
+    // Auto-refresh usage panel if same user
+    if ($('lookupUserId').value.trim() === userId) {
+      doLookup();
+    }
+  } catch (err) {
+    showError(`Network error: ${err.message}`);
+  } finally {
+    setGenerateLoading(false);
+  }
+}
+
+function setGenerateLoading(on) {
+  const btn = $('btn-generate');
+  btn.disabled = on;
+  btn.querySelector('.btn-label').innerHTML = on
+    ? '<span class="spinner"></span>'
+    : 'Generate';
+}
+
+function clearResponse() {
+  $('response-area').innerHTML = '';
+}
+
+function renderResponse(data) {
+  const cacheHit = data.cacheHit;
+  $('response-area').innerHTML = `
+    <div class="response-card">
+      <div class="response-text">${escHtml(data.response)}</div>
+      <div class="response-meta">
+        <span class="chip ${cacheHit ? 'hit' : 'miss'}">
+          ${cacheHit ? '⚡ Cache hit' : '🔄 Live inference'}
+        </span>
+        <span class="chip"><span class="chip-label">tokens</span>${fmt(data.tokensConsumed)}</span>
+        <span class="chip"><span class="chip-label">latency</span>${data.latencyMs}ms</span>
+        <span class="chip"><span class="chip-label">model</span>${escHtml(data.model || '—')}</span>
+        <span class="chip"><span class="chip-label">remaining</span>${fmt(data.remainingTokensThisMinute)} tok/min</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted);font-family:var(--mono)">
+        req: ${escHtml(data.requestId)}
+      </div>
+    </div>
+  `;
+}
+
+function showError(msg) {
+  $('response-area').innerHTML = `<div class="error-banner">${escHtml(msg)}</div>`;
+}
+
+function showApiError(data) {
+  const msg = data.message || data.error || JSON.stringify(data);
+  const extra = data.retryAfterSeconds
+    ? ` Retry after ${data.retryAfterSeconds}s.`
+    : '';
+  $('response-area').innerHTML = `
+    <div class="error-banner">
+      <strong>${escHtml(data.error || 'Error')}</strong>: ${escHtml(msg)}${escHtml(extra)}
+    </div>
+  `;
+}
+
+/* ── Quota bar ──────────────────────────────────────────────────────── */
+function updateQuota(consumed, remaining) {
+  if (remaining == null) return;
+  const limit = consumed + remaining;
+  const used = limit - remaining;
+  const p = pct(used, limit);
+  const wrap = $('quota-wrap');
+  wrap.style.display = '';
+  $('quota-text').textContent = `${fmt(used)} / ${fmt(limit)}`;
+  const bar = $('quota-bar');
+  bar.style.width = `${p}%`;
+  bar.className = 'bar-fill' + (p >= 90 ? ' crit' : p >= 70 ? ' warn' : '');
+}
+
+/* ── Usage lookup ───────────────────────────────────────────────────── */
+$('btn-lookup').addEventListener('click', doLookup);
+$('lookupUserId').addEventListener('keydown', e => { if (e.key === 'Enter') doLookup(); });
+
+async function doLookup() {
+  const userId = $('lookupUserId').value.trim();
+  if (!userId) return;
+
+  const btn = $('btn-lookup');
+  btn.disabled = true;
+  btn.querySelector('.btn-label').innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const r = await fetch(`${API}/usage/${encodeURIComponent(userId)}`);
+    const data = await r.json();
+
+    if (!r.ok) {
+      $('stats-area').innerHTML = `<div class="error-banner">${escHtml(data.message || 'User not found.')}</div>`;
+      return;
+    }
+
+    renderUsage(data);
+  } catch (err) {
+    $('stats-area').innerHTML = `<div class="error-banner">Network error: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.querySelector('.btn-label').textContent = 'Load';
+  }
+}
+
+function renderUsage(d) {
+  const windowPct = pct(d.tokensUsedThisMinute, d.tokensPerMinuteLimit);
+  const cacheRatePct = Math.round(d.cacheHitRate * 100);
+
+  const breakdown = (d.dailyBreakdown || []).slice(0, 7).reverse(); // last 7 days, oldest→newest
+  const maxTok = Math.max(...breakdown.map(b => b.tokensConsumed), 1);
+
+  const barCols = breakdown.map(b => {
+    const h = Math.max(4, Math.round(b.tokensConsumed / maxTok * 64));
+    return `
+      <div class="bar-col">
+        <div class="bar-col-fill" style="height:${h}px" title="${b.date}: ${fmt(b.tokensConsumed)} tokens"></div>
+        <div class="bar-col-label">${dateLabel(b.date)}</div>
+      </div>
+    `;
+  }).join('');
+
+  const tableRows = (d.dailyBreakdown || []).slice(0, 10).map(b => `
+    <tr>
+      <td>${b.date}</td>
+      <td>${fmt(b.tokensConsumed)}</td>
+      <td>${fmt(b.requests)}</td>
+      <td>${fmt(b.cacheHits)}</td>
+    </tr>
+  `).join('');
+
+  $('stats-area').innerHTML = `
+    <!-- Stat cards -->
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat-card">
+        <div class="stat-label">Total tokens</div>
+        <div class="stat-value">${fmtCompact(d.totalTokensConsumed)}</div>
+        <div class="stat-sub">${fmt(d.totalTokensConsumed)} total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total requests</div>
+        <div class="stat-value">${fmt(d.totalRequests)}</div>
+        <div class="stat-sub">${d.cacheHitCount} cache hits</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cache hit rate</div>
+        <div class="stat-value" style="color:${cacheRatePct >= 50 ? 'var(--green)' : 'var(--text)'}">${cacheRatePct}%</div>
+        <div class="stat-sub">${d.cacheHitCount} of ${d.totalRequests} requests</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">This minute</div>
+        <div class="stat-value" style="font-size:17px;color:${windowPct >= 90 ? 'var(--red)' : windowPct >= 70 ? 'var(--amber)' : 'var(--text)'}">
+          ${fmt(d.tokensUsedThisMinute)}
+        </div>
+        <div class="stat-sub">of ${fmt(d.tokensPerMinuteLimit)} limit (${windowPct}%)</div>
+      </div>
+    </div>
+
+    <!-- Window quota -->
+    <div class="quota-wrap" style="margin-bottom:20px">
+      <div class="quota-labels">
+        <span>Rate-limit window (this minute)</span>
+        <span>${fmt(d.tokensUsedThisMinute)} / ${fmt(d.tokensPerMinuteLimit)}</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill ${windowPct >= 90 ? 'crit' : windowPct >= 70 ? 'warn' : ''}"
+             style="width:${windowPct}%"></div>
+      </div>
+    </div>
+
+    <!-- Mini bar chart -->
+    ${breakdown.length ? `
+    <div class="chart-wrap" style="margin-bottom:20px">
+      <div class="chart-title">Token usage — last ${breakdown.length} days</div>
+      <div class="bar-chart">${barCols}</div>
+    </div>
+    ` : ''}
+
+    <!-- Daily breakdown table -->
+    ${tableRows ? `
+    <div>
+      <div class="chart-title" style="margin-bottom:10px">Daily breakdown</div>
+      <table class="breakdown-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Tokens</th>
+            <th>Requests</th>
+            <th>Cache hits</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    ` : '<div class="empty">No historical data yet.</div>'}
+
+    <div style="font-size:11px;color:var(--muted);text-align:right">
+      queried at ${new Date(d.queriedAt).toLocaleTimeString()}
+    </div>
+  `;
+}
+
+/* ── Helpers ────────────────────────────────────────────────────────── */
+function escHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function fmtCompact(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+  return String(n);
+}
+
+/* ── Keyboard shortcuts ─────────────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  // Cmd/Ctrl+/ → focus prompt
+  if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+    e.preventDefault();
+    $('prompt').focus();
+  }
+});
+</script>
+</body>
+</html>
+

@@ -20,7 +20,7 @@ public class OllamaChatRequest {
     @JsonProperty("messages")
     private List<Message> messages;
 
-    /** Must be false — we want a single complete response, not a stream. */
+    /** Enables Ollama's newline-delimited streaming response when true. */
     @JsonProperty("stream")
     @Builder.Default
     private boolean stream = false;

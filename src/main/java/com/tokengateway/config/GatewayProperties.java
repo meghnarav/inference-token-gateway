@@ -12,6 +12,7 @@ public class GatewayProperties {
     private RateLimitProperties rateLimit = new RateLimitProperties();
     private CacheProperties cache = new CacheProperties();
     private LlmProperties llm = new LlmProperties();
+    private KafkaProperties kafka = new KafkaProperties();
     private IdempotencyProperties idempotency = new IdempotencyProperties();
 
     @Data
@@ -80,5 +81,10 @@ public class GatewayProperties {
     @Data
     public static class IdempotencyProperties {
         private int ttlSeconds = 86_400;
+    }
+
+    @Data
+    public static class KafkaProperties {
+        private String usageTopic = "token-usage-events";
     }
 }

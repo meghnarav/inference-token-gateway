@@ -30,7 +30,7 @@ import java.util.Optional;
 @Slf4j
 public class SemanticResponseCache implements ResponseCache {
 
-    private final RedisResponseCache exactCache;
+    private final ResponseCache exactCache;
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final GatewayProperties properties;
@@ -39,8 +39,10 @@ public class SemanticResponseCache implements ResponseCache {
     private final Counter exactHitCounter;
     private final Counter semanticHitCounter;
     private final Counter missCounter;
+    private final Counter cacheHitMetric;
+    private final Counter cacheMissMetric;
 
-    public SemanticResponseCache(RedisResponseCache exactCache,
+    public SemanticResponseCache(@org.springframework.beans.factory.annotation.Qualifier("redisResponseCache") ResponseCache exactCache,
                                  EmbeddingModel embeddingModel,
                                  EmbeddingStore<TextSegment> embeddingStore,
                                  GatewayProperties properties,
@@ -54,6 +56,8 @@ public class SemanticResponseCache implements ResponseCache {
         this.exactHitCounter     = meterRegistry.counter("gateway.cache.hits", "tier", "exact_redis");
         this.semanticHitCounter  = meterRegistry.counter("gateway.cache.hits", "tier", "semantic_vector");
         this.missCounter         = meterRegistry.counter("gateway.cache.operations", "result", "total_miss");
+        this.cacheHitMetric      = meterRegistry.counter("gateway.cache.requests", "outcome", "hit");
+        this.cacheMissMetric     = meterRegistry.counter("gateway.cache.requests", "outcome", "miss");
     }
 
     @Override
@@ -66,6 +70,7 @@ public class SemanticResponseCache implements ResponseCache {
         Optional<GenerateResponse> exactMatch = exactCache.get(prompt);
         if (exactMatch.isPresent()) {
             exactHitCounter.increment();
+            cacheHitMetric.increment();
             log.info("[CACHE] L1 EXACT_HIT in Redis for prompt prefix='{}...'",
                     prompt.substring(0, Math.min(prompt.length(), 25)));
             return exactMatch;
@@ -74,6 +79,12 @@ public class SemanticResponseCache implements ResponseCache {
         // Tier 2: Semantic vector search via LangChain4j + Vector DB
         if (!properties.getCache().isSemanticEnabled()) {
             missCounter.increment();
+            cacheMissMetric.increment();
+            return Optional.empty();
+        }
+        if (prompt.length() > properties.getCache().getMaxCacheablePromptLength()) {
+            missCounter.increment();
+            cacheMissMetric.increment();
             return Optional.empty();
         }
 
@@ -95,14 +106,19 @@ public class SemanticResponseCache implements ResponseCache {
 
                 TextSegment segment = match.embedded();
                 Metadata meta = (segment != null) ? segment.metadata() : new Metadata();
+                Long expiresAt = meta.getLong("expiresAtEpochMs");
 
                 String cachedResponse = meta.getString("response");
-                if (cachedResponse != null && !cachedResponse.isBlank()) {
+                if (similarity >= threshold
+                        && (expiresAt == null || expiresAt > System.currentTimeMillis())
+                        && cachedResponse != null
+                        && !cachedResponse.isBlank()) {
                     String model = meta.getString("model");
                     Integer tokens = meta.getInteger("tokensConsumed");
                     int tokensConsumed = (tokens != null) ? tokens : tokenCounter.estimateTokens(cachedResponse);
 
                     semanticHitCounter.increment();
+                    cacheHitMetric.increment();
                     log.info("[SEMANTIC-CACHE] L2 SEMANTIC_HIT similarity={}/{} (search={}ms) for prompt='{}...'",
                             String.format("%.4f", similarity), threshold, searchLatencyMs,
                             prompt.substring(0, Math.min(prompt.length(), 30)));
@@ -126,6 +142,7 @@ public class SemanticResponseCache implements ResponseCache {
         }
 
         missCounter.increment();
+        cacheMissMetric.increment();
         return Optional.empty();
     }
 
@@ -159,6 +176,8 @@ public class SemanticResponseCache implements ResponseCache {
             metadata.put("model", response.getModel() != null ? response.getModel() : "unknown");
             metadata.put("tokensConsumed", response.getTokensConsumed());
             metadata.put("requestId", response.getRequestId() != null ? response.getRequestId() : "");
+            metadata.put("expiresAtEpochMs",
+                    System.currentTimeMillis() + properties.getCache().getResponseTtlSeconds() * 1_000L);
 
             TextSegment textSegment = TextSegment.from(prompt, metadata);
             embeddingStore.add(embedding, textSegment);
@@ -172,5 +191,19 @@ public class SemanticResponseCache implements ResponseCache {
     @Override
     public void evict(String prompt) {
         exactCache.evict(prompt);
+        if (!properties.getCache().isSemanticEnabled() || prompt == null || prompt.isBlank()) {
+            return;
+        }
+        try {
+            Embedding queryEmbedding = embeddingModel.embed(prompt).content();
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 10, 0.0);
+            matches.stream()
+                    .filter(match -> match.embedded() != null
+                            && prompt.equals(match.embedded().text()))
+                    .map(EmbeddingMatch::embeddingId)
+                    .forEach(embeddingStore::remove);
+        } catch (Exception e) {
+            log.warn("[SEMANTIC-CACHE] Vector eviction failed: {}", e.getMessage());
+        }
     }
 }

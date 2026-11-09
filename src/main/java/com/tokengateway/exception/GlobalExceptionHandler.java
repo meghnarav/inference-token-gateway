@@ -63,6 +63,14 @@ public class GlobalExceptionHandler {
                         "Inference backend is temporarily unavailable. Please retry.", 502));
     }
 
+    @ExceptionHandler(ProviderUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleProviderUnavailable(ProviderUnavailableException ex) {
+        log.warn("[ERROR] PROVIDER_UNAVAILABLE: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ErrorResponse.of(MDC.get("requestId"), "PROVIDER_UNAVAILABLE",
+                        "Inference provider is temporarily unavailable. Please retry later.", 502));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
         String details = ex.getBindingResult().getFieldErrors().stream()

@@ -54,6 +54,7 @@ public class SlidingWindowRateLimiter implements RateLimiter {
     private final GatewayProperties properties;
     private final Counter allowedCounter;
     private final Counter deniedCounter;
+    private final Counter rejectionMetric;
     private final Counter fallbackCounter;
 
     public SlidingWindowRateLimiter(StringRedisTemplate redis,
@@ -63,6 +64,7 @@ public class SlidingWindowRateLimiter implements RateLimiter {
         this.properties = properties;
         this.allowedCounter = meterRegistry.counter("gateway.ratelimit.decisions", "decision", "allowed");
         this.deniedCounter  = meterRegistry.counter("gateway.ratelimit.decisions", "decision", "denied");
+        this.rejectionMetric = meterRegistry.counter("gateway.ratelimit.rejections");
         this.fallbackCounter = meterRegistry.counter("gateway.ratelimit.fallback");
     }
 
@@ -135,6 +137,7 @@ public class SlidingWindowRateLimiter implements RateLimiter {
             log.info("[RATE-LIMIT] DENIED user={} requested={} currentUsage={} limit={}",
                     userId, tokensRequested, overUsage, limit);
             deniedCounter.increment();
+            rejectionMetric.increment();
             return RateLimitResult.denied(overUsage, limit, windowResetSeconds);
         }
 

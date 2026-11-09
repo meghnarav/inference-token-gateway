@@ -2,12 +2,13 @@ package com.tokengateway.service;
 
 import com.tokengateway.config.GatewayProperties;
 import com.tokengateway.dto.UsageResponse;
-import com.tokengateway.model.UsageEvent;
-import com.tokengateway.repository.UsageEventRepository;
+import com.tokengateway.dto.TokenUsageEvent;
 import com.tokengateway.repository.UserUsageSummaryRepository;
 import com.tokengateway.util.PromptHasher;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,30 +22,61 @@ import java.util.List;
  * Manages persistent usage tracking and aggregation.
  *
  * Responsibilities:
- * - Recording each request as an immutable UsageEvent
- * - Maintaining denormalized daily summaries for fast reads
- * - Auto-registering new users on first request
+ * - Publishing completed request usage events to Kafka
+ * - Providing usage reports from PostgreSQL
  * - Periodic cleanup of expired idempotency keys
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class UsageTrackingService {
 
-    private final UsageEventRepository usageEventRepo;
     private final UserUsageSummaryRepository summaryRepo;
     private final com.tokengateway.repository.GatewayUserRepository userRepo;
     private final com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo;
     private final RateLimiter rateLimiter;
     private final GatewayProperties properties;
     private final PromptHasher promptHasher;
+    private final TokenUsageEventPublisher usageEventPublisher;
+    private final DistributionSummary tokenConsumptionSummary;
+
+    @Autowired
+    public UsageTrackingService(UserUsageSummaryRepository summaryRepo,
+                                com.tokengateway.repository.GatewayUserRepository userRepo,
+                                com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo,
+                                RateLimiter rateLimiter,
+                                GatewayProperties properties,
+                                PromptHasher promptHasher,
+                                TokenUsageEventPublisher usageEventPublisher,
+                                MeterRegistry meterRegistry) {
+        this.summaryRepo = summaryRepo;
+        this.userRepo = userRepo;
+        this.idempotencyRepo = idempotencyRepo;
+        this.rateLimiter = rateLimiter;
+        this.properties = properties;
+        this.promptHasher = promptHasher;
+        this.usageEventPublisher = usageEventPublisher;
+        this.tokenConsumptionSummary = DistributionSummary.builder("gateway.request.tokens")
+                .description("Tokens consumed by completed gateway requests")
+                .baseUnit("tokens")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(meterRegistry);
+    }
+
+    protected UsageTrackingService(UserUsageSummaryRepository summaryRepo,
+                                   com.tokengateway.repository.GatewayUserRepository userRepo,
+                                   com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo,
+                                   RateLimiter rateLimiter,
+                                   GatewayProperties properties,
+                                   PromptHasher promptHasher,
+                                   TokenUsageEventPublisher usageEventPublisher) {
+        this(summaryRepo, userRepo, idempotencyRepo, rateLimiter, properties, promptHasher,
+                usageEventPublisher, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+    }
 
     /**
-     * Records a completed request.
-     * Operations:
-     * 1. Auto-register user if not exists
-     * 2. Insert UsageEvent (idempotent via requestId unique constraint)
-     * 3. UPSERT daily summary
+     * Queues a completed request for asynchronous persistence.
+     * PostgreSQL insertion and daily aggregation are performed by
+     * {@link TokenUsageEventConsumer}.
      *
      * @param requestId      Correlation ID
      * @param userId         User identifier
@@ -53,32 +85,21 @@ public class UsageTrackingService {
      * @param cacheHit       Whether this was a cache hit
      * @param latencyMs      End-to-end latency
      */
-    @Transactional
     public void record(String requestId, String userId, String prompt,
                        int tokensConsumed, boolean cacheHit, long latencyMs) {
-        // 1. Auto-register user
-        userRepo.registerIfAbsent(userId);
-
-        // 2. Insert usage event (skip if duplicate requestId — idempotent)
-        if (!usageEventRepo.existsByRequestId(requestId)) {
-            UsageEvent event = UsageEvent.builder()
-                    .requestId(requestId)
-                    .userId(userId)
-                    .promptHash(promptHasher.hash(prompt))
-                    .promptLength(prompt.length())
-                    .tokensConsumed(tokensConsumed)
-                    .cacheHit(cacheHit)
-                    .latencyMs((int) latencyMs)
-                    .build();
-            usageEventRepo.save(event);
-        } else {
-            log.warn("[USAGE] Duplicate requestId={} — skipping insert (idempotent)", requestId);
-        }
-
-        // 3. Upsert daily summary
-        summaryRepo.upsertDailySummary(userId, tokensConsumed, cacheHit ? 1 : 0);
-
-        log.info("[USAGE] Recorded requestId={} userId={} tokens={} cacheHit={}",
+        tokenConsumptionSummary.record(tokensConsumed);
+        usageEventPublisher.publish(TokenUsageEvent.builder()
+                .requestId(requestId)
+                .userId(userId)
+                .promptHash(promptHasher.hash(prompt))
+                .promptLength(prompt.length())
+                .tokensConsumed(tokensConsumed)
+                .cacheHit(cacheHit)
+                .latencyMs(latencyMs)
+                .modelId("inference")
+                .occurredAt(Instant.now())
+                .build());
+        log.info("[USAGE] Queued requestId={} userId={} tokens={} cacheHit={}",
                 requestId, userId, tokensConsumed, cacheHit);
     }
 

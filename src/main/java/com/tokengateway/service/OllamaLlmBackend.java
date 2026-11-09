@@ -5,15 +5,18 @@ import com.tokengateway.dto.GenerateResponse;
 import com.tokengateway.dto.ollama.OllamaChatRequest;
 import com.tokengateway.dto.ollama.OllamaChatResponse;
 import com.tokengateway.exception.LlmBackendException;
+import com.tokengateway.exception.ProviderUnavailableException;
 import com.tokengateway.util.TokenCounter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
@@ -55,6 +58,7 @@ public class OllamaLlmBackend implements LlmBackend {
     }
 
     @Override
+    @CircuitBreaker(name = "ollama", fallbackMethod = "fallbackGenerate")
     public GenerateResponse generate(String requestId, String userId, String prompt, String model) {
         GatewayProperties.LlmProperties llm = properties.getLlm();
         String resolvedModel = (model != null && !model.isBlank()) ? model : llm.getOllamaDefaultModel();
@@ -101,6 +105,7 @@ public class OllamaLlmBackend implements LlmBackend {
     }
 
     @Override
+    @CircuitBreaker(name = "ollama", fallbackMethod = "fallbackStream")
     public Flux<String> stream(String requestId, String userId, String prompt, String model) {
         GatewayProperties.LlmProperties llm = properties.getLlm();
         String resolvedModel = (model != null && !model.isBlank()) ? model : llm.getOllamaDefaultModel();
@@ -120,6 +125,11 @@ public class OllamaLlmBackend implements LlmBackend {
                 .uri(CHAT_PATH)
                 .bodyValue(chatRequest)
                 .retrieve()
+                .onStatus(status -> status.isError(), response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new LlmBackendException(
+                                        "Ollama streaming request failed (" + response.statusCode().value() + "): " + body,
+                                        null))))
                 .bodyToFlux(OllamaChatResponse.class)
                 .takeUntil(OllamaChatResponse::isDone)
                 .map(OllamaChatResponse::content)
@@ -132,6 +142,22 @@ public class OllamaLlmBackend implements LlmBackend {
                     errorCounter.increment();
                     log.error("[OLLAMA-STREAM] ERROR requestId={} error={}", requestId, err.getMessage());
                 });
+    }
+
+    private GenerateResponse fallbackGenerate(String requestId, String userId, String prompt,
+                                              String model, Throwable cause) {
+        errorCounter.increment();
+        log.warn("[OLLAMA] Circuit breaker fallback requestId={} userId={} cause={}",
+                requestId, userId, cause.toString());
+        throw new ProviderUnavailableException("Ollama provider unavailable", cause);
+    }
+
+    private Flux<String> fallbackStream(String requestId, String userId, String prompt,
+                                         String model, Throwable cause) {
+        errorCounter.increment();
+        log.warn("[OLLAMA-STREAM] Circuit breaker fallback requestId={} userId={} cause={}",
+                requestId, userId, cause.toString());
+        return Flux.error(new ProviderUnavailableException("Ollama provider unavailable", cause));
     }
 
     private OllamaChatResponse callWithRetry(OllamaChatRequest request,

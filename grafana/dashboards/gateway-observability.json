@@ -1,0 +1,47 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Cache hit ratio",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(gateway_cache_requests_total{outcome=\"hit\"}[5m])) / clamp_min(sum(rate(gateway_cache_requests_total[5m])), 1)",
+          "legendFormat": "hit %",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Average tokens per request",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(gateway_request_tokens_sum[5m]) / clamp_min(rate(gateway_request_tokens_count[5m]), 1)",
+          "legendFormat": "tokens",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate-limit rejections",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(gateway_ratelimit_rejections_total[5m])",
+          "legendFormat": "rejections/sec",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "Inference Gateway Observability",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "uid": "inference-gateway"
+}

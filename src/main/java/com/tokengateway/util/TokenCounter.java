@@ -56,13 +56,31 @@ public class TokenCounter {
         }
         if (encoding != null) {
             try {
-                int count = encoding.countTokens(text);
-                return Math.max(1, count + BASE_TOKEN_OVERHEAD);
+                return Math.max(1, countContentTokens(text) + BASE_TOKEN_OVERHEAD);
             } catch (Exception e) {
                 log.debug("[TOKEN-COUNTER] JTokkit count failed, using heuristic: {}", e.getMessage());
             }
         }
         return heuristicCount(text);
+    }
+
+    /**
+     * Counts content tokens without the chat/message overhead used by
+     * {@link #estimateTokens(String)}. This is useful while a response is
+     * streaming because the accumulated content is recounted on each chunk.
+     */
+    public int countContentTokens(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        if (encoding != null) {
+            try {
+                return encoding.countTokens(text);
+            } catch (Exception e) {
+                log.debug("[TOKEN-COUNTER] JTokkit content count failed, using heuristic: {}", e.getMessage());
+            }
+        }
+        return Math.max(0, heuristicCount(text) - BASE_TOKEN_OVERHEAD);
     }
 
     /**

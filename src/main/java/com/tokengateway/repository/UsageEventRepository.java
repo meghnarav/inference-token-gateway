@@ -8,6 +8,8 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Collection;
+import java.util.List;
 
 @Repository
 public interface UsageEventRepository extends JpaRepository<UsageEvent, Long> {
@@ -15,6 +17,8 @@ public interface UsageEventRepository extends JpaRepository<UsageEvent, Long> {
     Optional<UsageEvent> findByRequestId(String requestId);
 
     boolean existsByRequestId(String requestId);
+
+    List<UsageEvent> findByRequestIdIn(Collection<String> requestIds);
 
     @Query("""
         SELECT COALESCE(SUM(e.tokensConsumed), 0)

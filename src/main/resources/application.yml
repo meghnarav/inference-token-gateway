@@ -36,6 +36,28 @@ spring:
           max-wait: 1000ms
         shutdown-timeout: 200ms
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 5
+      properties:
+        enable.idempotence: true
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:token-usage-persistence}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.tokengateway.dto
+        max.poll.records: ${KAFKA_BATCH_SIZE:100}
+    listener:
+      type: batch
+      ack-mode: batch
+
   cache:
     type: redis
 
@@ -62,6 +84,13 @@ gateway:
     semantic-enabled: ${SEMANTIC_CACHE_ENABLED:true}
     similarity-threshold: ${SEMANTIC_SIMILARITY_THRESHOLD:0.95}
     vector-dimension: 384
+
+  kafka:
+    usage-topic: ${KAFKA_USAGE_TOPIC:token-usage-events}
+
+  idempotency:
+    # Idempotency key TTL (seconds)
+    ttl-seconds: 86400
 
   llm:
     # ── Provider selection ───────────────────────────────────────────────
@@ -93,9 +122,38 @@ gateway:
     max-retries:        ${LLM_MAX_RETRIES:2}
     retry-backoff-ms:   ${LLM_RETRY_BACKOFF_MS:500}
 
-  idempotency:
-    # Idempotency key TTL (seconds)
-    ttl-seconds: 86400
+# Circuit breakers for external LLM providers
+resilience4j:
+  circuitbreaker:
+    instances:
+      openAi:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: ${OPENAI_CB_WINDOW_SIZE:20}
+        minimum-number-of-calls: ${OPENAI_CB_MIN_CALLS:10}
+        failure-rate-threshold: ${OPENAI_CB_FAILURE_RATE:50}
+        slow-call-rate-threshold: ${OPENAI_CB_SLOW_RATE:50}
+        slow-call-duration-threshold: ${OPENAI_CB_SLOW_DURATION:10s}
+        wait-duration-in-open-state: ${OPENAI_CB_OPEN_WAIT:30s}
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - java.lang.Exception
+      ollama:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: ${OLLAMA_CB_WINDOW_SIZE:20}
+        minimum-number-of-calls: ${OLLAMA_CB_MIN_CALLS:10}
+        failure-rate-threshold: ${OLLAMA_CB_FAILURE_RATE:50}
+        slow-call-rate-threshold: ${OLLAMA_CB_SLOW_RATE:50}
+        slow-call-duration-threshold: ${OLLAMA_CB_SLOW_DURATION:10s}
+        wait-duration-in-open-state: ${OLLAMA_CB_OPEN_WAIT:30s}
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - java.lang.Exception
+  metrics:
+    enabled: true
 
 # Actuator / observability
 management:

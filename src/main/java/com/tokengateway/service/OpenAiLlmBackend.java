@@ -8,15 +8,19 @@ import com.tokengateway.dto.openai.OpenAiChatRequest;
 import com.tokengateway.dto.openai.OpenAiChatResponse;
 import com.tokengateway.dto.openai.OpenAiErrorResponse;
 import com.tokengateway.exception.LlmBackendException;
+import com.tokengateway.exception.ProviderUnavailableException;
 import com.tokengateway.util.TokenCounter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Service;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
@@ -65,6 +69,7 @@ public class OpenAiLlmBackend implements LlmBackend {
     }
 
     @Override
+    @CircuitBreaker(name = "openAi", fallbackMethod = "fallbackGenerate")
     public GenerateResponse generate(String requestId, String userId, String prompt, String model) {
         GatewayProperties.LlmProperties llm = properties.getLlm();
         String resolvedModel = (model != null && !model.isBlank()) ? model : llm.getOpenaiDefaultModel();
@@ -112,6 +117,7 @@ public class OpenAiLlmBackend implements LlmBackend {
     }
 
     @Override
+    @CircuitBreaker(name = "openAi", fallbackMethod = "fallbackStream")
     public Flux<String> stream(String requestId, String userId, String prompt, String model) {
         GatewayProperties.LlmProperties llm = properties.getLlm();
         String resolvedModel = (model != null && !model.isBlank()) ? model : llm.getOpenaiDefaultModel();
@@ -134,15 +140,17 @@ public class OpenAiLlmBackend implements LlmBackend {
                 .bodyValue(chatRequest)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .retrieve()
-                .bodyToFlux(String.class)
-                .filter(chunk -> chunk != null && !chunk.isBlank())
-                .flatMap(chunk -> {
-                    String data = chunk.trim();
-                    if (data.startsWith("data:")) {
-                        data = data.substring(5).trim();
-                    }
+                .onStatus(status -> status.isError(), response ->
+                        response.bodyToMono(String.class)
+                                .flatMap(body -> Mono.error(new LlmBackendException(
+                                        "OpenAI streaming request failed (" + response.statusCode().value() + "): " + body,
+                                        null))))
+                .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
+                .map(ServerSentEvent::data)
+                .filter(data -> data != null && !data.isBlank() && !"[DONE]".equals(data.trim()))
+                .<String>handle((data, sink) -> {
                     if (data.equals("[DONE]") || data.isEmpty()) {
-                        return Flux.empty();
+                        return;
                     }
                     try {
                         JsonNode root = objectMapper.readTree(data);
@@ -151,13 +159,12 @@ public class OpenAiLlmBackend implements LlmBackend {
                             JsonNode delta = choices.get(0).path("delta");
                             String content = delta.path("content").asText(null);
                             if (content != null && !content.isEmpty()) {
-                                return Flux.just(content);
+                                sink.next(content);
                             }
                         }
                     } catch (Exception e) {
-                        log.debug("[OPENAI-STREAM] Ignored raw non-json line: {}", data);
+                        log.warn("[OPENAI-STREAM] Invalid SSE data requestId={} error={}", requestId, e.getMessage());
                     }
-                    return Flux.empty();
                 })
                 .doOnComplete(() -> {
                     successCounter.increment();
@@ -167,6 +174,22 @@ public class OpenAiLlmBackend implements LlmBackend {
                     errorCounter.increment();
                     log.error("[OPENAI-STREAM] ERROR requestId={} error={}", requestId, err.getMessage());
                 });
+    }
+
+    private GenerateResponse fallbackGenerate(String requestId, String userId, String prompt,
+                                              String model, Throwable cause) {
+        errorCounter.increment();
+        log.warn("[OPENAI] Circuit breaker fallback requestId={} userId={} cause={}",
+                requestId, userId, cause.toString());
+        throw new ProviderUnavailableException("OpenAI provider unavailable", cause);
+    }
+
+    private Flux<String> fallbackStream(String requestId, String userId, String prompt,
+                                         String model, Throwable cause) {
+        errorCounter.increment();
+        log.warn("[OPENAI-STREAM] Circuit breaker fallback requestId={} userId={} cause={}",
+                requestId, userId, cause.toString());
+        return Flux.error(new ProviderUnavailableException("OpenAI provider unavailable", cause));
     }
 
     private OpenAiChatResponse callWithRetry(OpenAiChatRequest request,

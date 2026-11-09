@@ -26,7 +26,7 @@ public class OpenAiChatRequest {
     @JsonProperty("temperature")
     private Double temperature;
 
-    /** Stream must be false — we consume the full response synchronously. */
+    /** Enables OpenAI Server-Sent Events when true. */
     @JsonProperty("stream")
     @Builder.Default
     private boolean stream = false;

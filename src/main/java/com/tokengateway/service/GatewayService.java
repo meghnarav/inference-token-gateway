@@ -8,6 +8,7 @@ import com.tokengateway.dto.RateLimitResult;
 import com.tokengateway.dto.StreamChunk;
 import com.tokengateway.dto.UsageResponse;
 import com.tokengateway.exception.RateLimitExceededException;
+import com.tokengateway.exception.ProviderUnavailableException;
 import com.tokengateway.exception.UserNotFoundException;
 import com.tokengateway.util.RequestIdGenerator;
 import com.tokengateway.util.TokenCounter;
@@ -195,6 +196,9 @@ public class GatewayService {
             // Refund tokens on LLM failure
             rateLimiter.refund(userId, estimatedTokens);
             log.error("[GATEWAY] LLM_ERROR requestId={} error={}", requestId, e.getMessage(), e);
+            if (e instanceof ProviderUnavailableException providerUnavailable) {
+                throw providerUnavailable;
+            }
             throw new com.tokengateway.exception.LlmBackendException("LLM backend error: " + e.getMessage(), e);
         }
 
@@ -287,15 +291,31 @@ public class GatewayService {
             }
         }
 
-        // Step 2: Semantic Cache lookup (LangChain4j + pgvector)
+        // Step 2: Pre-flight rate limit check (conservative prompt tokens estimate, min 50)
+        int initialEstimatedTokens = Math.max(50, tokenCounter.estimateTokens(prompt));
+        RateLimitResult rateLimitResult = rateLimiter.tryConsume(userId, initialEstimatedTokens);
+        if (!rateLimitResult.isAllowed()) {
+            log.warn("[GATEWAY-STREAM] RATE_LIMIT_EXCEEDED pre-flight userId={}", userId);
+            return Flux.error(new RateLimitExceededException(
+                    userId,
+                    rateLimitResult.getCurrentUsage(),
+                    rateLimitResult.getLimit(),
+                    rateLimitResult.getWindowResetSeconds()
+            ));
+        }
+
+        // Step 3: Semantic Cache lookup (LangChain4j + pgvector)
         var cached = responseCache.get(prompt);
         if (cached.isPresent()) {
             GenerateResponse cachedResponse = cached.get();
             int promptTokens = tokenCounter.estimateTokens(prompt);
+            int refund = initialEstimatedTokens - promptTokens;
+            if (refund > 0) {
+                rateLimiter.refund(userId, refund);
+            }
             long latency = System.currentTimeMillis() - startMs;
             log.info("[GATEWAY-STREAM] CACHE_HIT requestId={} userId={}", requestId, userId);
 
-            // Record reduced usage for cache hit
             recordUsageAsync(requestId, userId, prompt, promptTokens, true, latency);
 
             StreamChunk chunk = StreamChunk.builder()
@@ -309,19 +329,6 @@ public class GatewayService {
             return Flux.just(ServerSentEvent.builder(chunk).build());
         }
 
-        // Step 3: Pre-flight rate limit check (conservative prompt tokens estimate, min 50)
-        int initialEstimatedTokens = Math.max(50, tokenCounter.estimateTokens(prompt));
-        RateLimitResult rateLimitResult = rateLimiter.tryConsume(userId, initialEstimatedTokens);
-        if (!rateLimitResult.isAllowed()) {
-            log.warn("[GATEWAY-STREAM] RATE_LIMIT_EXCEEDED pre-flight userId={}", userId);
-            return Flux.error(new RateLimitExceededException(
-                    userId,
-                    rateLimitResult.getCurrentUsage(),
-                    rateLimitResult.getLimit(),
-                    rateLimitResult.getWindowResetSeconds()
-            ));
-        }
-
         // Step 4: Stream from LLM backend with on-the-fly token counting and rate limit enforcement
         StringBuilder fullResponse = new StringBuilder();
         AtomicInteger grantedTokens = new AtomicInteger(initialEstimatedTokens);
@@ -332,10 +339,10 @@ public class GatewayService {
 
         return rawStream
                 .takeWhile(chunk -> !rateLimitedMidStream.get())
-                .flatMap(chunk -> {
+                .concatMap(chunk -> {
                     fullResponse.append(chunk);
                     // Count total tokens generated so far on the fly
-                    int currentGenTokens = tokenCounter.estimateTokens(fullResponse.toString());
+                    int currentGenTokens = tokenCounter.countContentTokens(fullResponse.toString());
                     int totalConsumed = promptTokens.get() + currentGenTokens;
 
                     // If consumption exceeds pre-granted budget, enforce rate limit on the fly
@@ -350,7 +357,7 @@ public class GatewayService {
                             rateLimitedMidStream.set(true);
                             StreamChunk errorChunk = StreamChunk.builder()
                                     .requestId(requestId)
-                                    .content(chunk)
+                                    .content("")
                                     .tokensSoFar(totalConsumed)
                                     .done(true)
                                     .finishReason("rate_limit_exceeded")
@@ -374,7 +381,7 @@ public class GatewayService {
                     if (rateLimitedMidStream.get()) {
                         return Flux.empty();
                     }
-                    int finalTotalTokens = promptTokens.get() + tokenCounter.estimateTokens(fullResponse.toString());
+                    int finalTotalTokens = promptTokens.get() + tokenCounter.countContentTokens(fullResponse.toString());
                     StreamChunk doneChunk = StreamChunk.builder()
                             .requestId(requestId)
                             .content("")
@@ -387,7 +394,11 @@ public class GatewayService {
                 }))
                 .doOnComplete(() -> {
                     long totalLatency = System.currentTimeMillis() - startMs;
-                    int actualTotalTokens = promptTokens.get() + tokenCounter.estimateTokens(fullResponse.toString());
+                    int actualTotalTokens = promptTokens.get() + tokenCounter.countContentTokens(fullResponse.toString());
+
+                    if (rateLimitedMidStream.get()) {
+                        return;
+                    }
 
                     // Refund any unused granted tokens
                     int refund = grantedTokens.get() - actualTotalTokens;
@@ -419,7 +430,8 @@ public class GatewayService {
                 .doOnError(err -> {
                     log.error("[GATEWAY-STREAM] STREAM ERROR requestId={} error={}", requestId, err.getMessage());
                     // Refund unconsumed tokens
-                    int refund = grantedTokens.get() - promptTokens.get();
+                    int actualTotalTokens = promptTokens.get() + tokenCounter.countContentTokens(fullResponse.toString());
+                    int refund = grantedTokens.get() - actualTotalTokens;
                     if (refund > 0) {
                         rateLimiter.refund(userId, refund);
                     }

@@ -11,6 +11,7 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,7 +21,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -98,8 +98,8 @@ class SemanticResponseCacheTest {
         TextSegment matchedSegment = TextSegment.from("What is API rate limiting?", meta);
 
         EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(0.965, "match-1", dummyEmbedding, matchedSegment);
-        when(embeddingStore.findRelevant(eq(dummyEmbedding), eq(1), eq(0.95)))
-                .thenReturn(List.of(match));
+        when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
+                .thenReturn(new dev.langchain4j.store.embedding.EmbeddingSearchResult<>(List.of(match)));
 
         Optional<GenerateResponse> result = semanticCache.get(prompt);
 
@@ -119,8 +119,8 @@ class SemanticResponseCacheTest {
         when(embeddingModel.embed(prompt)).thenReturn(Response.from(dummyEmbedding));
         TextSegment matchedSegment = TextSegment.from("A rocket question", new Metadata());
         EmbeddingMatch<TextSegment> match = new EmbeddingMatch<>(0.90, "match-1", dummyEmbedding, matchedSegment);
-        when(embeddingStore.findRelevant(eq(dummyEmbedding), eq(1), eq(0.95)))
-                .thenReturn(List.of(match));
+        when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
+                .thenReturn(new dev.langchain4j.store.embedding.EmbeddingSearchResult<>(List.of(match)));
 
         Optional<GenerateResponse> result = semanticCache.get(prompt);
 
@@ -139,8 +139,9 @@ class SemanticResponseCacheTest {
         metadata.put("response", "Expired response");
         metadata.put("expiresAtEpochMs", System.currentTimeMillis() - 1);
         TextSegment segment = TextSegment.from(prompt, metadata);
-        when(embeddingStore.findRelevant(eq(embedding), eq(1), eq(0.95)))
-                .thenReturn(List.of(new EmbeddingMatch<>(0.99, "expired", embedding, segment)));
+        when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
+                .thenReturn(new dev.langchain4j.store.embedding.EmbeddingSearchResult<>(
+                        List.of(new EmbeddingMatch<>(0.99, "expired", embedding, segment))));
 
         assertThat(semanticCache.get(prompt)).isEmpty();
     }

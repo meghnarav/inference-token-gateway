@@ -51,7 +51,7 @@ class StreamingGatewayTest {
         final List<Integer> recordedTokens = new ArrayList<>();
 
         public TestableUsageTrackingService() {
-            super(null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null);
         }
 
         @Override

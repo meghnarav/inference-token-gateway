@@ -100,20 +100,22 @@ public class SlidingWindowRateLimiter implements RateLimiter {
         // Execute as a Redis MULTI/EXEC pipeline for atomicity
         List<Object> results = redis.execute(new SessionCallback<List<Object>>() {
             @Override
-            public List<Object> execute(RedisOperations operations) throws DataAccessException {
+            public <K, V> List<Object> execute(RedisOperations<K, V> operations) throws DataAccessException {
+                K typedKey = (K) key;
+                V typedMember = (V) member;
                 operations.multi();
 
                 // Step 1: Remove expired entries outside the sliding window
-                operations.opsForZSet().removeRangeByScore(key, 0, windowStart);
+                operations.opsForZSet().removeRangeByScore(typedKey, 0, windowStart);
 
                 // Step 2: Add this request's token entry
-                operations.opsForZSet().add(key, member, now);
+                operations.opsForZSet().add(typedKey, typedMember, now);
 
                 // Step 3: Fetch all entries in the current window
-                operations.opsForZSet().rangeByScoreWithScores(key, windowStart, now + 1);
+                operations.opsForZSet().rangeByScoreWithScores(typedKey, windowStart, now + 1);
 
                 // Step 4: Set TTL on the key
-                operations.expire(key, ttlSeconds, TimeUnit.SECONDS);
+                operations.expire(typedKey, ttlSeconds, TimeUnit.SECONDS);
 
                 return operations.exec();
             }

@@ -8,6 +8,7 @@ import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -96,7 +97,13 @@ public class SemanticResponseCache implements ResponseCache {
             Embedding queryEmbedding = embeddingModel.embed(prompt).content();
 
             // Search for nearest vector with cosine similarity >= threshold (default 0.95)
-            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 1, threshold);
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                    EmbeddingSearchRequest.builder()
+                            .queryEmbedding(queryEmbedding)
+                            .maxResults(1)
+                            .minScore(threshold)
+                            .build())
+                    .matches();
 
             long searchLatencyMs = System.currentTimeMillis() - startMs;
 
@@ -196,7 +203,13 @@ public class SemanticResponseCache implements ResponseCache {
         }
         try {
             Embedding queryEmbedding = embeddingModel.embed(prompt).content();
-            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.findRelevant(queryEmbedding, 10, 0.0);
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                    EmbeddingSearchRequest.builder()
+                            .queryEmbedding(queryEmbedding)
+                            .maxResults(10)
+                            .minScore(0.0)
+                            .build())
+                    .matches();
             matches.stream()
                     .filter(match -> match.embedded() != null
                             && prompt.equals(match.embedded().text()))

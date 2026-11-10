@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -48,7 +47,7 @@ public class SimulatedLlmBackend implements LlmBackend {
         long startMs = System.currentTimeMillis();
 
         // Simulate LLM inference latency
-        int latencyMs = simulateLatency();
+        simulateLatency();
 
         // Generate a contextual fake response
         String responseText = generateResponse(prompt);

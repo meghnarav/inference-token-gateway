@@ -144,6 +144,7 @@ public class OllamaLlmBackend implements LlmBackend {
                 });
     }
 
+    @SuppressWarnings("unused")
     private GenerateResponse fallbackGenerate(String requestId, String userId, String prompt,
                                               String model, Throwable cause) {
         errorCounter.increment();
@@ -152,6 +153,7 @@ public class OllamaLlmBackend implements LlmBackend {
         throw new ProviderUnavailableException("Ollama provider unavailable", cause);
     }
 
+    @SuppressWarnings("unused")
     private Flux<String> fallbackStream(String requestId, String userId, String prompt,
                                          String model, Throwable cause) {
         errorCounter.increment();

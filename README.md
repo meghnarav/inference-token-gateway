@@ -109,16 +109,48 @@ docker compose up --build
 
 Compose starts:
 
-- Gateway on `http://localhost:8080`
-- PostgreSQL with pgvector on port `5432`
-- Redis on port `6379`
-- Kafka in KRaft mode on port `9092`
-- Prometheus on `http://localhost:9090`
-- Grafana on `http://localhost:3000`
+- Gateway privately on `127.0.0.1:8080`
+- PostgreSQL with pgvector privately on `127.0.0.1:5432`
+- Redis privately on `127.0.0.1:6379`
+- Kafka in KRaft mode privately on `127.0.0.1:9092`
+- Prometheus privately on `127.0.0.1:9090`
+- Grafana privately on `127.0.0.1:3000`
+- Caddy on ports `80` and `443` as the only public entrypoint
 
 Grafana is provisioned automatically with a Prometheus datasource and an
 Inference Gateway dashboard. The default credentials are `admin` / `admin`;
 override them with `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD`.
+
+### Oracle Cloud Always Free rollout
+
+The Compose file is intentionally configured for a hybrid deployment:
+
+1. Infrastructure ports stay bound to loopback and are never exposed to the
+   internet.
+2. Caddy is the only internet-facing service and reverse-proxies the UI and
+   API to the gateway over the private Compose network.
+3. During private validation, use an SSH tunnel from your laptop:
+
+   ```bash
+   ssh -N -L 8080:127.0.0.1:8080 ubuntu@<ORACLE_VM_PUBLIC_IP>
+   ```
+
+   Then open `http://localhost:8080`. Prometheus and Grafana can be inspected
+   with equivalent tunnels, for example
+   `ssh -N -L 3000:127.0.0.1:3000 ubuntu@<ORACLE_VM_PUBLIC_IP>`.
+4. For public access, point a DNS `A` record such as `gateway.example.com` at
+   the VM public IP and start Compose with:
+
+   ```bash
+   DOMAIN=gateway.example.com docker compose up -d --build
+   ```
+
+   Open only TCP ports `80` and `443` in the Oracle security list and Ubuntu
+   firewall. Caddy obtains and renews the HTTPS certificate automatically.
+
+Do not open ports `5432`, `6379`, `9092`, `9090`, or `3000` in the Oracle
+firewall. Keep `GRAFANA_ADMIN_PASSWORD` set to a strong secret even though
+Grafana is loopback-only.
 
 Stop the stack and remove persistent volumes with:
 

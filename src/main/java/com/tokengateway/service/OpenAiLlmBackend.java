@@ -176,6 +176,7 @@ public class OpenAiLlmBackend implements LlmBackend {
                 });
     }
 
+    @SuppressWarnings("unused")
     private GenerateResponse fallbackGenerate(String requestId, String userId, String prompt,
                                               String model, Throwable cause) {
         errorCounter.increment();
@@ -184,6 +185,7 @@ public class OpenAiLlmBackend implements LlmBackend {
         throw new ProviderUnavailableException("OpenAI provider unavailable", cause);
     }
 
+    @SuppressWarnings("unused")
     private Flux<String> fallbackStream(String requestId, String userId, String prompt,
                                          String model, Throwable cause) {
         errorCounter.increment();
@@ -201,7 +203,7 @@ public class OpenAiLlmBackend implements LlmBackend {
                     .uri(COMPLETIONS_PATH)
                     .bodyValue(request)
                     .retrieve()
-                    .onStatus(HttpStatus.TOO_MANY_REQUESTS::equals, resp ->
+                    .onStatus(status -> status.value() == HttpStatus.TOO_MANY_REQUESTS.value(), resp ->
                             resp.bodyToMono(String.class).flatMap(body -> {
                                 log.warn("[OPENAI] 429 rate limited requestId={}", requestId);
                                 return Mono.error(new LlmBackendException("OpenAI rate limit exceeded (429): " + body, null));

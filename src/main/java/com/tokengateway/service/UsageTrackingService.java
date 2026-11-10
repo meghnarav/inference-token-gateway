@@ -31,7 +31,6 @@ import java.util.List;
 public class UsageTrackingService {
 
     private final UserUsageSummaryRepository summaryRepo;
-    private final com.tokengateway.repository.GatewayUserRepository userRepo;
     private final com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo;
     private final RateLimiter rateLimiter;
     private final GatewayProperties properties;
@@ -41,7 +40,6 @@ public class UsageTrackingService {
 
     @Autowired
     public UsageTrackingService(UserUsageSummaryRepository summaryRepo,
-                                com.tokengateway.repository.GatewayUserRepository userRepo,
                                 com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo,
                                 RateLimiter rateLimiter,
                                 GatewayProperties properties,
@@ -49,7 +47,6 @@ public class UsageTrackingService {
                                 TokenUsageEventPublisher usageEventPublisher,
                                 MeterRegistry meterRegistry) {
         this.summaryRepo = summaryRepo;
-        this.userRepo = userRepo;
         this.idempotencyRepo = idempotencyRepo;
         this.rateLimiter = rateLimiter;
         this.properties = properties;
@@ -63,13 +60,12 @@ public class UsageTrackingService {
     }
 
     protected UsageTrackingService(UserUsageSummaryRepository summaryRepo,
-                                   com.tokengateway.repository.GatewayUserRepository userRepo,
                                    com.tokengateway.repository.IdempotencyKeyRepository idempotencyRepo,
                                    RateLimiter rateLimiter,
                                    GatewayProperties properties,
                                    PromptHasher promptHasher,
                                    TokenUsageEventPublisher usageEventPublisher) {
-        this(summaryRepo, userRepo, idempotencyRepo, rateLimiter, properties, promptHasher,
+        this(summaryRepo, idempotencyRepo, rateLimiter, properties, promptHasher,
                 usageEventPublisher, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 

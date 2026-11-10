@@ -5,6 +5,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
@@ -26,8 +27,9 @@ import java.util.Map;
 public class KafkaConfig {
 
     @Bean
-    public ProducerFactory<String, TokenUsageEvent> tokenUsageProducerFactory(KafkaProperties properties) {
-        Map<String, Object> config = new HashMap<>(properties.buildProducerProperties());
+    public ProducerFactory<String, TokenUsageEvent> tokenUsageProducerFactory(KafkaProperties properties,
+                                                                                SslBundles sslBundles) {
+        Map<String, Object> config = new HashMap<>(properties.buildProducerProperties(sslBundles));
         config.putIfAbsent(org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
                 StringSerializer.class);
         config.putIfAbsent(org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
@@ -42,8 +44,9 @@ public class KafkaConfig {
     }
 
     @Bean
-    public ConsumerFactory<String, TokenUsageEvent> tokenUsageConsumerFactory(KafkaProperties properties) {
-        Map<String, Object> config = new HashMap<>(properties.buildConsumerProperties());
+    public ConsumerFactory<String, TokenUsageEvent> tokenUsageConsumerFactory(KafkaProperties properties,
+                                                                                SslBundles sslBundles) {
+        Map<String, Object> config = new HashMap<>(properties.buildConsumerProperties(sslBundles));
         config.putIfAbsent(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         config.putIfAbsent(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
 

@@ -2,20 +2,12 @@ package com.tokengateway;
 
 import com.tokengateway.config.GatewayProperties;
 import com.tokengateway.dto.RateLimitResult;
-import com.tokengateway.service.SlidingWindowRateLimiter;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for SlidingWindowRateLimiter.

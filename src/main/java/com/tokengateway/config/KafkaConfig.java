@@ -47,12 +47,11 @@ public class KafkaConfig {
     public ConsumerFactory<String, TokenUsageEvent> tokenUsageConsumerFactory(KafkaProperties properties,
                                                                                 SslBundles sslBundles) {
         Map<String, Object> config = new HashMap<>(properties.buildConsumerProperties(sslBundles));
-        config.putIfAbsent(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        config.putIfAbsent(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
+        config.remove(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG);
+        config.remove(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG);
 
         JsonDeserializer<TokenUsageEvent> valueDeserializer =
                 new JsonDeserializer<>(TokenUsageEvent.class);
-        valueDeserializer.addTrustedPackages("com.tokengateway.dto");
         return new DefaultKafkaConsumerFactory<>(config, new StringDeserializer(), valueDeserializer);
     }
 

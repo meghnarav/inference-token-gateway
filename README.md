@@ -110,8 +110,8 @@ docker compose up --build
 Compose starts:
 
 - Gateway privately on `127.0.0.1:8080`
-- PostgreSQL with pgvector privately on `127.0.0.1:5432`
-- Redis privately on `127.0.0.1:6379`
+- PostgreSQL with pgvector privately on `127.0.0.1:5433` (container port `5432`)
+- Redis privately on `127.0.0.1:6380` (container port `6379`)
 - Kafka in KRaft mode privately on `127.0.0.1:9092`
 - Prometheus privately on `127.0.0.1:9090`
 - Grafana privately on `127.0.0.1:3000`

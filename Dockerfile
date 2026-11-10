@@ -13,10 +13,10 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn package -DskipTests -B --no-transfer-progress
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────────
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:21-jre AS runtime
 
 # Security: run as non-root
-RUN addgroup -S gateway && adduser -S gateway -G gateway
+RUN groupadd --system gateway && useradd --system --gid gateway gateway
 USER gateway
 
 WORKDIR /app
